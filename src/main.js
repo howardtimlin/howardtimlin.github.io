@@ -2,6 +2,10 @@ import "./style.css";
 import * as THREE from "three";
 import { PointerLockControlsManifold } from "./PointerLockControlsManifold";
 
+import jsonTest from "./assets/surface.json";
+
+console.log(jsonTest);
+
 /*
 Camera and Renderer Setup
 */
@@ -161,7 +165,7 @@ let loader = new THREE.ObjectLoader();
 
 loader.load(
   // resource URL
-  "./assets/surface.json",
+  jsonTest,
 
   // onLoad callback
   function (obj) {
