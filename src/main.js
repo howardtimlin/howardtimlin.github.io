@@ -2,16 +2,39 @@ import "./style.css";
 import * as THREE from "three";
 import { PointerLockControlsManifold } from "./PointerLockControlsManifold";
 
-import surfaceURL from "./assets/surface.json?url";
+import surfaceURL from "./assets/geometry/surface_to_flat.json?url";
+import { seededRandom } from "three/src/math/MathUtils";
+
+let surfaceMaxFrame = 0;
+const surfaceFrames = [];
+let surface = new THREE.Object3D();
+
+const gridScale = 60;
+const gridSize = 3;
+const gridLerp = 0.05;
+const gridSink = 2 * gridScale;
+let gridDown = false;
+let gridAnimation = false;
+const gridAnimationError = 0.0001;
+const grid = [];
+
+const gridOffset = Math.floor(gridSize / 2);
 
 /*
 Camera and Renderer Setup
 */
 
-const cameraHeight = 5;
+const animationDelay = 80;
+const cameraAnimationPos = new THREE.Vector3(750, 750, 750);
+
+const cameraFOV = 90;
+const cameraHeight = 2;
+const cameraLerp = 0.05;
+const cameraSlerp = 0.1;
+const moveSpeed = 7;
 
 let scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+const camera = new THREE.PerspectiveCamera(cameraFOV, window.innerWidth / window.innerHeight, 0.1, 1000);
 
 camera.position.set(0, cameraHeight, 0);
 
@@ -46,8 +69,6 @@ controls.addEventListener("unlock", function () {
 
 scene.add(controls.getObject());
 
-const moveSpeed = 15;
-
 let moveForward = false;
 let moveBackward = false;
 let moveLeft = false;
@@ -73,6 +94,13 @@ const onKeyDown = function (event) {
     case "ArrowRight":
     case "KeyD":
       moveRight = true;
+      break;
+
+    case "KeyO":
+      surfaceFlat();
+      break;
+    case "KeyP":
+      surfaceMinimal();
       break;
   }
 };
@@ -156,7 +184,7 @@ scene.add(floor);
 let boxGeometry = new THREE.BoxGeometry(1, 1, 2);
 
 const box1 = new THREE.Mesh(boxGeometry, new THREE.MeshNormalMaterial());
-box1.position.set(0, -3, -3);
+box1.position.set(0, 3, 0);
 scene.add(box1);
 
 let loader = new THREE.ObjectLoader();
@@ -166,8 +194,40 @@ loader.load(
   surfaceURL,
 
   // onLoad callback
-  function (obj) {
-    scene.add(obj);
+  function (fileScene) {
+    scene.add(fileScene);
+
+    surfaceMaxFrame = fileScene.children.length - 1;
+
+    fileScene.children.forEach(function (obj) {
+      const frameIndex = parseInt(obj.name);
+      obj.material.side = THREE.DoubleSide;
+      if (frameIndex != surfaceMaxFrame) {
+        obj.visible = false;
+      } else {
+        surface = obj;
+      }
+      surfaceFrames[frameIndex] = obj;
+    });
+
+    for (let i = 0; i < gridSize; i++) {
+      grid[i] = [];
+      for (let j = 0; j < gridSize; j++) {
+        if (i != gridOffset || i != j) {
+          grid[i][j] = surface.clone();
+
+          grid[i][j].translateX((i - gridOffset) * gridScale);
+          grid[i][j].translateZ((j - gridOffset) * gridScale);
+
+          const gridPos = new THREE.Vector3();
+          gridPos.copy(grid[i][j].position);
+          grid[i][j].translateY(-gridSink);
+
+          scene.add(grid[i][j]);
+        }
+      }
+    }
+    gridAnimation = true;
   },
 
   // onProgress callback
@@ -231,7 +291,7 @@ function animate() {
   //raycaster.set(camera.position, cameraDown);
   raycaster.set(avatar.position, cameraDown);
 
-  const intersects = raycaster.intersectObjects(scene.children);
+  const intersects = raycaster.intersectObject(surface);
 
   if (intersects.length > 0) {
     if (!intersects[0].face.normal.equals(camera.up) || intersects[0].distance != cameraHeight) {
@@ -255,13 +315,94 @@ function animate() {
       camera.up.copy(intersects[0].face.normal);
     }
   }
-  camera.position.lerp(avatar.position, 0.05);
-  camera.quaternion.slerp(avatar.quaternion, 0.1);
+  if (controls.isLocked) {
+    camera.position.lerp(avatar.position, cameraLerp);
+    camera.quaternion.slerp(avatar.quaternion, cameraSlerp);
+  }
+
+  if (gridAnimation) {
+    for (let i = 0; i < gridSize; i++) {
+      for (let j = 0; j < gridSize; j++) {
+        if (i != gridOffset || i != j) {
+          grid[i][j].visible = true;
+          const gridPos = new THREE.Vector3(grid[i][j].position.x, -gridDown * gridSink, grid[i][j].position.z);
+          const distGridLerp =
+            (gridLerp * (gridSize * gridScale ** 2)) / (grid[i][j].position.x ** 2 + grid[i][j].position.z ** 2);
+
+          grid[i][j].position.lerp(gridPos, distGridLerp);
+          grid[i][j].scale.lerp(new THREE.Vector3(!gridDown, !gridDown, !gridDown), gridLerp);
+
+          if (grid[i][j].position.y < -gridSink + 1000 * gridAnimationError) {
+            grid[i][j].visible = false;
+          }
+        }
+      }
+    }
+    if (grid[0][0].position.y > -gridAnimationError || grid[0][0].position.y < -gridSink + gridAnimationError) {
+      gridAnimation = false;
+    }
+  }
 
   prevTime = time;
 }
 
 animate();
+
+function surfaceMinimal() {
+  if (surfaceFrames[surfaceMaxFrame].visible) {
+    controls.isLocked = false;
+    gridDown = true;
+    gridAnimation = true;
+    camera.position.lerp(cameraAnimationPos, cameraLerp);
+    camera.lookAt(new THREE.Vector3(0, 0, 0));
+
+    callNTimes(
+      function (num) {
+        surfaceFrames[num].visible = false;
+        surfaceFrames[num - 1].visible = true;
+        surface = surfaceFrames[num - 1];
+
+        if (num == 1) {
+          controls.isLocked = true;
+        }
+      },
+      surfaceMaxFrame,
+      animationDelay
+    );
+  }
+}
+
+function surfaceFlat() {
+  if (surfaceFrames[0].visible) {
+    controls.isLocked = false;
+    camera.position.lerp(cameraAnimationPos, cameraLerp);
+    camera.lookAt(new THREE.Vector3(0, 0, 0));
+
+    callNTimes(
+      function (num) {
+        surfaceFrames[surfaceMaxFrame - num].visible = false;
+        surfaceFrames[surfaceMaxFrame - num + 1].visible = true;
+        surface = surfaceFrames[surfaceMaxFrame - num + 1];
+
+        if (num == 1) {
+          controls.isLocked = true;
+          gridDown = false;
+          gridAnimation = true;
+        }
+      },
+      surfaceMaxFrame,
+      animationDelay
+    );
+  }
+}
+
+function callNTimes(func, num, delay) {
+  if (!num) return;
+  func(num);
+  setTimeout(function () {
+    callNTimes(func, num - 1, delay);
+  }, delay);
+}
 
 window.addEventListener("resize", onWindowResize, false);
 
