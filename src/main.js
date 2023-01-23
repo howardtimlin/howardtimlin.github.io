@@ -2,8 +2,10 @@ import "./style.css";
 import * as THREE from "three";
 import { PointerLockControlsManifold } from "./PointerLockControlsManifold";
 
-import surfaceURL from "./assets/geometry/surface_to_flat.json?url";
-import { seededRandom } from "three/src/math/MathUtils";
+import objects from "./assets/objects.json";
+console.log(objects);
+
+const surfaceURL = "./geometry/surface_to_flat.json";
 
 let surfaceMaxFrame = 0;
 const surfaceFrames = [];
@@ -11,11 +13,8 @@ let surface = new THREE.Object3D();
 
 const gridScale = 60;
 const gridSize = 3;
-const gridLerp = 0.05;
 const gridSink = 2 * gridScale;
-let gridDown = false;
-let gridAnimation = false;
-const gridAnimationError = 0.0001;
+const gridNumFrames = 40;
 const grid = [];
 
 const gridOffset = Math.floor(gridSize / 2);
@@ -24,8 +23,8 @@ const gridOffset = Math.floor(gridSize / 2);
 Camera and Renderer Setup
 */
 
-const animationDelay = 80;
-const cameraAnimationPos = new THREE.Vector3(750, 750, 750);
+const animationDelay = 40;
+const cameraAnimationPos = new THREE.Vector3(50, 50, 50);
 
 const cameraFOV = 90;
 const cameraHeight = 2;
@@ -41,6 +40,8 @@ camera.position.set(0, cameraHeight, 0);
 let renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0xeeeeee, 1);
+
 document.body.appendChild(renderer.domElement);
 
 let avatar = new THREE.Object3D();
@@ -181,11 +182,6 @@ const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x049ef4 });
 const floor = new THREE.Mesh(floorGeometry, floorMaterial);
 scene.add(floor);
 */
-let boxGeometry = new THREE.BoxGeometry(1, 1, 2);
-
-const box1 = new THREE.Mesh(boxGeometry, new THREE.MeshNormalMaterial());
-box1.position.set(0, 3, 0);
-scene.add(box1);
 
 let loader = new THREE.ObjectLoader();
 
@@ -227,7 +223,8 @@ loader.load(
         }
       }
     }
-    gridAnimation = true;
+    gridUp();
+    console.log(scene);
   },
 
   // onProgress callback
@@ -240,6 +237,59 @@ loader.load(
     console.error("An error happened");
   }
 );
+
+for (let name in objects) {
+  const url = "./geometry/objects/" + name + ".json";
+
+  const boxDiag = new THREE.Vector3();
+  boxDiag.copy(objects[name].boundingBox.max);
+  boxDiag.sub(objects[name].boundingBox.min);
+
+  const boxGeometry = new THREE.BoxGeometry(boxDiag.x, boxDiag.y, boxDiag.z);
+  const boxMaterial = new THREE.MeshStandardMaterial({ color: 0x71797e, transparent: true, opacity: 0.25 });
+
+  const box = new THREE.Mesh(boxGeometry, boxMaterial);
+  const loadBox = new THREE.Mesh(boxGeometry, boxMaterial);
+
+  box.position.copy(objects[name]["flatPos"]);
+  box.quaternion.multiply(objects[name]["flatQuat"]);
+  loadBox.position.copy(objects[name]["flatPos"]);
+  loadBox.quaternion.multiply(objects[name]["flatQuat"]);
+
+  loadBox.material.transparent = false;
+
+  scene.add(box);
+  scene.add(loadBox);
+
+  loader.load(
+    url,
+
+    // onLoad callback
+    function (fileScene) {
+      scene.add(fileScene);
+      objects[name]["instance"] = fileScene;
+
+      // make threejs center of imported scene the same as the imported object's center
+      fileScene.children.forEach(function (obj) {
+        obj.geometry.translate(-objects[name]["flatPos"].x, -objects[name]["flatPos"].y, -objects[name]["flatPos"].z);
+      });
+      fileScene.position.copy(objects[name]["flatPos"]);
+
+      scene.remove(box);
+      scene.remove(loadBox);
+    },
+
+    //onProgress callback
+    function (xhr) {
+      loadBox.scale.copy(new THREE.Vector3(1, xhr.loaded / xhr.total, 1));
+    },
+
+    // onError callback
+    function (err) {
+      console.error("An error happened");
+    }
+  );
+}
 
 /*
 Animation Loop
@@ -320,29 +370,6 @@ function animate() {
     camera.quaternion.slerp(avatar.quaternion, cameraSlerp);
   }
 
-  if (gridAnimation) {
-    for (let i = 0; i < gridSize; i++) {
-      for (let j = 0; j < gridSize; j++) {
-        if (i != gridOffset || i != j) {
-          grid[i][j].visible = true;
-          const gridPos = new THREE.Vector3(grid[i][j].position.x, -gridDown * gridSink, grid[i][j].position.z);
-          const distGridLerp =
-            (gridLerp * (gridSize * gridScale ** 2)) / (grid[i][j].position.x ** 2 + grid[i][j].position.z ** 2);
-
-          grid[i][j].position.lerp(gridPos, distGridLerp);
-          grid[i][j].scale.lerp(new THREE.Vector3(!gridDown, !gridDown, !gridDown), gridLerp);
-
-          if (grid[i][j].position.y < -gridSink + 1000 * gridAnimationError) {
-            grid[i][j].visible = false;
-          }
-        }
-      }
-    }
-    if (grid[0][0].position.y > -gridAnimationError || grid[0][0].position.y < -gridSink + gridAnimationError) {
-      gridAnimation = false;
-    }
-  }
-
   prevTime = time;
 }
 
@@ -351,16 +378,46 @@ animate();
 function surfaceMinimal() {
   if (surfaceFrames[surfaceMaxFrame].visible) {
     controls.isLocked = false;
-    gridDown = true;
-    gridAnimation = true;
-    camera.position.lerp(cameraAnimationPos, cameraLerp);
+    camera.position.copy(cameraAnimationPos);
     camera.lookAt(new THREE.Vector3(0, 0, 0));
+
+    gridDown();
 
     callNTimes(
       function (num) {
         surfaceFrames[num].visible = false;
         surfaceFrames[num - 1].visible = true;
         surface = surfaceFrames[num - 1];
+
+        for (let name in objects) {
+          const newVertexPos = new THREE.Vector3();
+          newVertexPos.fromBufferAttribute(
+            surfaceFrames[num - 1].geometry.getAttribute("position"),
+            objects[name]["surfaceIndex"]
+          );
+          const oldVertexPos = new THREE.Vector3();
+          oldVertexPos.fromBufferAttribute(
+            surfaceFrames[num].geometry.getAttribute("position"),
+            objects[name]["surfaceIndex"]
+          );
+          const newVertexNormal = new THREE.Vector3();
+          newVertexNormal.fromBufferAttribute(
+            surfaceFrames[num - 1].geometry.getAttribute("normal"),
+            objects[name]["surfaceIndex"]
+          );
+          const oldVertexNormal = new THREE.Vector3();
+          oldVertexNormal.fromBufferAttribute(
+            surfaceFrames[num].geometry.getAttribute("normal"),
+            objects[name]["surfaceIndex"]
+          );
+
+          newVertexPos.sub(oldVertexPos);
+          objects[name]["instance"].position.add(newVertexPos);
+
+          let quatRotation = new THREE.Quaternion();
+          quatRotation.setFromUnitVectors(oldVertexNormal, newVertexNormal);
+          objects[name]["instance"].quaternion.multiply(quatRotation);
+        }
 
         if (num == 1) {
           controls.isLocked = true;
@@ -375,7 +432,7 @@ function surfaceMinimal() {
 function surfaceFlat() {
   if (surfaceFrames[0].visible) {
     controls.isLocked = false;
-    camera.position.lerp(cameraAnimationPos, cameraLerp);
+    camera.position.copy(cameraAnimationPos);
     camera.lookAt(new THREE.Vector3(0, 0, 0));
 
     callNTimes(
@@ -384,16 +441,91 @@ function surfaceFlat() {
         surfaceFrames[surfaceMaxFrame - num + 1].visible = true;
         surface = surfaceFrames[surfaceMaxFrame - num + 1];
 
+        for (let name in objects) {
+          const newVertexPos = new THREE.Vector3();
+          newVertexPos.fromBufferAttribute(
+            surfaceFrames[surfaceMaxFrame - num + 1].geometry.getAttribute("position"),
+            objects[name]["surfaceIndex"]
+          );
+          const oldVertexPos = new THREE.Vector3();
+          oldVertexPos.fromBufferAttribute(
+            surfaceFrames[surfaceMaxFrame - num].geometry.getAttribute("position"),
+            objects[name]["surfaceIndex"]
+          );
+          const newVertexNormal = new THREE.Vector3();
+          newVertexNormal.fromBufferAttribute(
+            surfaceFrames[surfaceMaxFrame - num + 1].geometry.getAttribute("normal"),
+            objects[name]["surfaceIndex"]
+          );
+          const oldVertexNormal = new THREE.Vector3();
+          oldVertexNormal.fromBufferAttribute(
+            surfaceFrames[surfaceMaxFrame - num].geometry.getAttribute("normal"),
+            objects[name]["surfaceIndex"]
+          );
+
+          newVertexPos.sub(oldVertexPos);
+          objects[name]["instance"].position.add(newVertexPos);
+
+          let quatRotation = new THREE.Quaternion();
+          quatRotation.setFromUnitVectors(oldVertexNormal, newVertexNormal);
+          objects[name]["instance"].quaternion.multiply(quatRotation);
+        }
+
         if (num == 1) {
           controls.isLocked = true;
-          gridDown = false;
-          gridAnimation = true;
+
+          gridUp();
         }
       },
       surfaceMaxFrame,
       animationDelay
     );
   }
+}
+
+function gridUp() {
+  callNTimes(
+    function (num) {
+      for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+          if (i != gridOffset || i != j) {
+            if (num == gridNumFrames) {
+              grid[i][j].visible = true;
+            }
+            const gridPos = new THREE.Vector3(grid[i][j].position.x, 0, grid[i][j].position.z);
+            const alpha = (gridNumFrames - num + 1) / gridNumFrames;
+            grid[i][j].position.lerp(gridPos, alpha);
+            grid[i][j].scale.lerp(new THREE.Vector3(1, 1, 1), alpha);
+          }
+        }
+      }
+    },
+    gridNumFrames,
+    animationDelay
+  );
+}
+
+function gridDown() {
+  callNTimes(
+    function (num) {
+      for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+          if (i != gridOffset || i != j) {
+            const gridPos = new THREE.Vector3(grid[i][j].position.x, -gridSink, grid[i][j].position.z);
+            const alpha = (gridNumFrames - num + 1) / gridNumFrames;
+            grid[i][j].position.lerp(gridPos, alpha);
+            grid[i][j].scale.lerp(new THREE.Vector3(0.001, 0.001, 0.001), alpha);
+
+            if (num == 1) {
+              grid[i][j].visible = false;
+            }
+          }
+        }
+      }
+    },
+    gridNumFrames,
+    animationDelay
+  );
 }
 
 function callNTimes(func, num, delay) {
